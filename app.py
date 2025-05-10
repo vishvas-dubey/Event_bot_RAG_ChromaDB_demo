@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 import html
-from google import genai
+from google.generativeai import genai
 from google.genai import types
 from langchain_chroma import Chroma
 from langchain.prompts import ChatPromptTemplate

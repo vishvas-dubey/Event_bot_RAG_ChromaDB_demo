@@ -7,3 +7,4 @@ google-generativeai
 chromadb
 html5lib
 google-genai
+pysqlite3-binary

@@ -1,3 +1,12 @@
+import sys
+try:
+    __import__('pysqlite3')
+    sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+except ImportError:
+    pass
+
+
+
 import streamlit as st
 import os
 import html
@@ -13,7 +22,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class EventAssistantRAGBot:
-    def __init__(self, api_key, chroma_path="chroma"):
+    def __init__(self, api_key, chroma_path="/chroma"):
         self.api_key = api_key
         self.chroma_path = chroma_path
         # Initialize Gemini client

@@ -88,8 +88,11 @@ class EventAssistantRAGBot:
 
     def answer_question(self, query):
         """Use RAG with Google Gemini to answer a question based on retrieved context."""
+        vector_db_time = 0
+        llm_time = 0
         try:
             with st.spinner("Retrieving relevant information..."):
+                start_time = time.time()
                 # Using Google embeddings
                 embedding_function = GoogleGenerativeAIEmbeddings(
                     model="models/embedding-001",
@@ -100,6 +103,8 @@ class EventAssistantRAGBot:
                 db = Chroma(persist_directory=self.chroma_path, embedding_function=embedding_function)
                 results = db.similarity_search_with_score(query, k=5)
                 context_text = "\n\n --- \n\n".join([doc.page_content for doc, _score in results])
+                end_time = time.time()
+                vector_db_time = end_time - start_time
                 
                 # Format the prompt
                 prompt_template = ChatPromptTemplate.from_template(self.prompt_template)
@@ -116,17 +121,32 @@ class EventAssistantRAGBot:
                 ]
             
             with st.spinner("Generating response..."):
+                start_time = time.time()
                 # Generate response using Gemini 2.0 Flash model
                 response = self.client.models.generate_content(
                     model="gemini-2.0-flash",  # Using Gemini 2.0 Flash model
                     contents=contents,
                 )
+                end_time = time.time()
+                llm_time = end_time - start_time
                 
-                raw_response = response.text
-                return self.post_process_response(raw_response, query)
+                raw_response_text = response.text
+                processed_response_text = self.post_process_response(raw_response_text, query)
+                
+                # Return a dictionary including the text and timings
+                return {
+                    "text": processed_response_text,
+                    "vector_db_time": vector_db_time,
+                    "llm_time": llm_time
+                }
                 
         except Exception as e:
-            return f"An error occurred: {str(e)}"
+            # In case of error, return the error message but with zero timings
+            return {
+                "text": f"An error occurred: {str(e)}",
+                "vector_db_time": vector_db_time,
+                "llm_time": llm_time
+            }
 
 # Set page configuration
 st.set_page_config(
@@ -135,7 +155,7 @@ st.set_page_config(
     layout="centered"
 )
 
-# Load the CSS as before
+# Load the CSS as before, adding styles for timings
 st.markdown("""
 <style>
 /* Bot message formatting */
@@ -145,6 +165,13 @@ st.markdown("""
     margin-bottom: 0 !important;
     color: black !important;
     background-color: #fcf8ed !important; /* Off-white background */
+    padding: 10px 15px !important; /* Add padding */
+    border-radius: 18px !important; /* Add border-radius */
+    max-width: 80% !important; /* Set max width */
+    margin-left: 10px !important; /* Add margin */
+    word-wrap: break-word !important; /* Handle long words */
+    display: flex !important; /* Use flexbox */
+    flex-direction: column !important; /* Stack content and timings */
 }
 
 .bot-message ol {
@@ -162,6 +189,15 @@ st.markdown("""
 .bot-message p {
     margin-bottom: 10px !important;
 }
+
+.bot-message-content {
+    /* Styles for the main text content */
+    flex-grow: 1 !important; /* Allows content to take available space */
+    margin-bottom: 5px !important; /* Space between content and timings */
+    line-height: 1.5 !important;
+    white-space: pre-line !important;
+}
+
 
 /* Chat container and message styles */
 .custom-chat-container {
@@ -211,15 +247,15 @@ st.markdown("""
     word-wrap: break-word !important;
 }
 
-.bot-message {
-    background-color: #fcf8ed !important; /* Off-white background */
-    color: black !important;
-    padding: 10px 15px !important;
-    border-radius: 18px !important;
-    max-width: 80% !important;
-    margin-left: 10px !important;
-    word-wrap: break-word !important;
+
+.bot-message-timings {
+    font-size: 0.75em !important; /* Smaller font */
+    color: #555 !important; /* Darker gray */
+    margin-top: 5px !important; /* Add spacing */
+    display: block !important; /* Ensure it's on its own line */
+    align-self: flex-end !important; /* Align timings to the right */
 }
+
 div.custom-chat-container {
     border-radius: 15px;
     border: 1px solid #ccc; /* Optional border */
@@ -251,7 +287,7 @@ if "bot" not in st.session_state:
     with st.spinner("Initializing assistant..."):
         st.session_state.bot = EventAssistantRAGBot(api_key, chroma_path)
     
-    # Add welcome message with options
+    # Add welcome message with options - This message won't have timings initially
     if not st.session_state.messages:
         welcome_message = """Hello! I'm Event bot.
 I can help you with the following:
@@ -264,12 +300,12 @@ I can help you with the following:
 
 How can I help you with information about this event?"""
         
+        # Store welcome message as a dictionary with None for timings
         st.session_state.messages.append(
-            {"role": "assistant", "content": welcome_message}
+            {"role": "assistant", "content": {"text": welcome_message, "vector_db_time": None, "llm_time": None}}
         )
 
-# Custom Chat UI Implementation - Same as previous example
-# Open a container div for the chat
+# Custom Chat UI Implementation
 chat_html = '<div class="custom-chat-container">'
 
 # Add all messages to the custom chat HTML
@@ -278,26 +314,32 @@ for message in st.session_state.messages:
         avatar = '<div class="avatar-icon user-avatar-icon">👤</div>'
         chat_html += f'<div class="message-container user">'
         chat_html += avatar
+        # User messages are simple text
         chat_html += f'<div class="user-message">{html.escape(message["content"])}</div>'
         chat_html += '</div>'
     else:  # assistant
         avatar = '<div class="avatar-icon">🤖</div>'
+        # We apply the bot-message class to the INNER div now, which contains content and timings
         chat_html += f'<div class="message-container">'
         chat_html += avatar
-        # Get the content
-        content = message["content"]
         
-        # Format differently based on whether it's the welcome message
-        if "I can help you with the following:" in content:
-            # For the welcome message - Create the HTML directly without f-strings
-            # This avoids the backslash issue entirely
-            welcome_html = content
-            # First replace the beginning part
-            welcome_html = welcome_html.replace(
+        # Access the content dictionary
+        content_dict = message["content"]
+        content_text = content_dict["text"]
+        vector_db_time = content_dict.get("vector_db_time")
+        llm_time = content_dict.get("llm_time")
+
+        # Start the inner bot message div that holds both content and timings
+        chat_html += '<div class="bot-message">'
+        
+        # Format message content - Special handling for the welcome message
+        if "I can help you with the following:" in content_text:
+            # For the welcome message - Use the existing welcome_html logic
+            # Note: Escaping is not done here for the welcome message's structured HTML parts
+            welcome_html = content_text.replace(
                 "Hello! I'm Event bot.\nI can help you with the following:", 
                 "Hello! I'm Event bot.<br><br>I can help you with the following:"
             )
-            # Then handle numbered list items (using regular strings, not f-strings)
             welcome_html = welcome_html.replace('\n1. ', "<ol style='margin-top:8px;margin-bottom:8px;padding-left:25px;'><li style='margin-bottom:4px;'>")
             welcome_html = welcome_html.replace('\n2. ', "</li><li style='margin-bottom:4px;'>")
             welcome_html = welcome_html.replace('\n3. ', "</li><li style='margin-bottom:4px;'>")
@@ -306,16 +348,24 @@ for message in st.session_state.messages:
             welcome_html = welcome_html.replace('\n6. ', "</li><li style='margin-bottom:4px;'>")
             welcome_html = welcome_html.replace('\n\nHow can I help you', "</li></ol><br>How can I help you")
             
-            # Add to chat HTML without using f-string with the processed content
-            chat_html += '<div class="bot-message">' + welcome_html + '</div>'
+            chat_html += '<div class="bot-message-content">' + welcome_html + '</div>'
+
         else:
-            # For regular messages - first escape HTML
-            escaped_content = html.escape(content)
-            # Replace newlines with <br> tags
+            # For regular messages - escape and format text content
+            escaped_content = html.escape(content_text)
             formatted_content = escaped_content.replace('\n', '<br>')
-            # Add to chat HTML without using f-string for the processed content
-            chat_html += '<div class="bot-message">' + formatted_content + '</div>'
-        chat_html += '</div>'
+            
+            chat_html += f'<div class="bot-message-content">{formatted_content}</div>'
+        
+        # Add timings if available (not for the welcome message which has None)
+        if vector_db_time is not None and llm_time is not None:
+             timings_html = f'<span class="bot-message-timings">Vector DB: {vector_db_time:.2f}s | LLM: {llm_time:.2f}s</span>'
+             chat_html += timings_html
+
+        # Close the inner bot message div
+        chat_html += '</div>' # Closes bot-message
+
+        chat_html += '</div>' # Closes message-container
 
 # Close the container div
 chat_html += '</div>'
@@ -330,11 +380,11 @@ if user_input:
     # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": user_input})
     
-    # Generate response
-    response = st.session_state.bot.answer_question(user_input)
+    # Generate response (this now returns a dict)
+    response_dict = st.session_state.bot.answer_question(user_input)
     
-    # Add assistant response to chat history
-    st.session_state.messages.append({"role": "assistant", "content": response})
+    # Add assistant response (the dict) to chat history
+    st.session_state.messages.append({"role": "assistant", "content": response_dict})
     
     # Rerun to update the UI
     st.rerun()

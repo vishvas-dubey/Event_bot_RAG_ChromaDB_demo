@@ -151,7 +151,7 @@ class EventAssistantRAGBot:
 # Set page configuration
 st.set_page_config(
     page_title="Build with AI - RAG Event Bot",
-    page_icon="🎫",
+    page_icon="🚀",
     layout="centered"
 )
 

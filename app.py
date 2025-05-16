@@ -17,40 +17,60 @@ from langchain.prompts import ChatPromptTemplate
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import time
 from dotenv import load_dotenv
+import PyPDF2  # Agar PDF support chahiye
 
 # Load environment variables
 load_dotenv()
 
 class EventAssistantRAGBot:
-    def __init__(self, api_key, chroma_path="/chroma"):
+    def __init__(self, api_key, chroma_path="/chroma", template_type="event"):
         self.api_key = api_key
         self.chroma_path = chroma_path
         # Initialize Gemini client
         self.client = genai.Client(api_key=self.api_key)
-        self.prompt_template = """
-        You are a friendly Event Information Assistant. Your primary purpose is to answer questions about the event described in the provided context. Follow these guidelines:
+        self.set_prompt_template(template_type)
 
-        1. You can respond to basic greetings like "hi", "hello", or "how are you" in a warm, welcoming manner
-        2. For event information, only provide details that are present in the context
-        3. If information is not in the context, politely say "I'm sorry, I don't have that specific information about the event"
-        4. Keep responses concise but conversational
-        5. Do not make assumptions beyond what's explicitly stated in the context
-        6. Always prioritize factual accuracy while maintaining a helpful tone
-        7. Do not introduce information that isn't in the context
-        8. If unsure about any information, acknowledge uncertainty rather than guess
-        9. You may suggest a few general questions users might want to ask about the event
-        10. Remember to maintain a warm, friendly tone in all interactions
-        11. You should refer to yourself as "Event Bot"
-        12. You should not greet if the user has not greeted to you
+    def set_prompt_template(self, template_type="event"):
+        if template_type == "resume":
+            self.prompt_template = """
+            You are a helpful Resume Assistant. Your primary purpose is to answer questions about the uploaded resume described in the provided context. Follow these guidelines:
 
-        Remember: While you can be conversational, your primary role is providing accurate information about this specific event based on the context provided.
+            1. Only provide details that are present in the resume context.
+            2. If information is not in the context, politely say "Sorry, this information is not available in the uploaded resume."
+            3. Keep responses concise and factual.
+            4. Do not make assumptions beyond what's in the resume.
+            5. Refer to yourself as "Resume Assistant".
 
-        Context information about the event:
-        {context}
-        --------
-        
-        Now, please answer this question about the event: {question}
-        """
+            Resume context:
+            {context}
+            --------
+            Now, please answer this question about the resume: {question}
+            """
+        else:
+            self.prompt_template = """
+            You are a friendly Event Information Assistant. Your primary purpose is to answer questions about the event described in the provided context. Follow these guidelines:
+
+            1. You can respond to basic greetings like "hi", "hello", or "how are you" in a warm, welcoming manner
+            2. For event information, only provide details that are present in the context
+            3. If information is not in the context, politely say "I'm sorry, I don't have that specific information about the event"
+            4. Keep responses concise but conversational
+            5. Do not make assumptions beyond what's explicitly stated in the context
+            6. Always prioritize factual accuracy while maintaining a helpful tone
+            7. Do not introduce information that isn't in the context
+            8. If unsure about any information, acknowledge uncertainty rather than guess
+            9. You may suggest a few general questions users might want to ask about the event
+            10. Remember to maintain a warm, friendly tone in all interactions
+            11. You should refer to yourself as "Event Bot"
+            12. You should not greet if the user has not greeted to you
+
+            Remember: While you can be conversational, your primary role is providing accurate information about this specific event based on the context provided.
+
+            Context information about the event:
+            {context}
+            --------
+            
+            Now, please answer this question about the event: {question}
+            """
 
     def post_process_response(self, response, query):
         """Format responses for better readability based on query type."""
@@ -105,7 +125,16 @@ class EventAssistantRAGBot:
                 context_text = "\n\n --- \n\n".join([doc.page_content for doc, _score in results])
                 end_time = time.time()
                 vector_db_time = end_time - start_time
-                
+
+                # --- ADD THIS: If no relevant context found, return custom message ---
+                if not context_text.strip():
+                    return {
+                        "text": "File me aisi jankari nahi hai.",
+                        "vector_db_time": vector_db_time,
+                        "llm_time": 0
+                    }
+                # --- END ADD ---
+
                 # Format the prompt
                 prompt_template = ChatPromptTemplate.from_template(self.prompt_template)
                 prompt = prompt_template.format(context=context_text, question=query)
@@ -286,24 +315,6 @@ if "bot" not in st.session_state:
     
     with st.spinner("Initializing assistant..."):
         st.session_state.bot = EventAssistantRAGBot(api_key, chroma_path)
-    
-    # Add welcome message with options - This message won't have timings initially
-    if not st.session_state.messages:
-        welcome_message = """Hello! I'm Event bot.
-I can help you with the following:
-1. Agenda of the "Build with AI" workshop
-2. Important Dates of this workshop
-3. Details of the AI Hackathon
-4. Presentation of Interesting projects in AI, ML
-5. Locating the washrooms
-6. Details of lunch at the venue
-
-How can I help you with information about this event?"""
-        
-        # Store welcome message as a dictionary with None for timings
-        st.session_state.messages.append(
-            {"role": "assistant", "content": {"text": welcome_message, "vector_db_time": None, "llm_time": None}}
-        )
 
 # Custom Chat UI Implementation
 chat_html = '<div class="custom-chat-container">'
@@ -388,3 +399,45 @@ if user_input:
     
     # Rerun to update the UI
     st.rerun()
+
+uploaded_file = st.file_uploader("Apni file upload karein (PDF, TXT, DOCX)", type=["pdf", "txt", "docx"])
+
+user_file_text = ""
+chroma_path = "chroma"
+
+if uploaded_file is not None:
+    filename = uploaded_file.name.lower()
+    if filename.endswith(".pdf"):
+        try:
+            reader = PyPDF2.PdfReader(uploaded_file)
+            user_file_text = "\n".join([page.extract_text() for page in reader.pages])
+        except Exception as e:
+            st.error(f"PDF read error: {e}")
+    elif filename.endswith(".txt"):
+        user_file_text = uploaded_file.read().decode("utf-8")
+    elif filename.endswith(".docx"):
+        try:
+            import docx
+            doc = docx.Document(uploaded_file)
+            user_file_text = "\n".join([para.text for para in doc.paragraphs])
+        except Exception as e:
+            st.error(f"DOCX read error: {e}")
+
+    if user_file_text.strip():
+        embedding_function = GoogleGenerativeAIEmbeddings(
+            model="models/embedding-001",
+            google_api_key=api_key
+        )
+        db = Chroma(persist_directory=chroma_path, embedding_function=embedding_function)
+        db.delete_collection()  # Clear all previous data
+
+        # --- IMPORTANT: Re-initialize Chroma instance after delete ---
+        db = Chroma(persist_directory=chroma_path, embedding_function=embedding_function)
+
+        # Now add only the new file's content
+        db.add_texts([user_file_text], metadatas=[{"source": "user_upload"}])
+        st.success("File content database me sirf aapki nayi file ka data hai!")
+
+        # Refresh the bot's ChromaDB instance and clear chat
+        st.session_state.bot = EventAssistantRAGBot(api_key, chroma_path)
+        st.session_state.messages = []

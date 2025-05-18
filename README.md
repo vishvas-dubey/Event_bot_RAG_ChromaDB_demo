@@ -94,7 +94,7 @@ You can deploy this app for free on [Streamlit Cloud](https://streamlit.io/cloud
 ## Troubleshooting
 
 - **streamlit: command not found**  
-  → Run `pip install streamlit`
+  → Run `python3 -m streamlit run app.py`
 - **API key not found**  
   → Make sure `.env` file is present and contains your `GEMINI_API_KEY`
 - **Chroma directory not found**  
